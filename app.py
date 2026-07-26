@@ -1094,13 +1094,15 @@ def yoy_comparison():
                             'transition_patterns': []})
 
         month_ids = [m['id'] for m in months]
-        terms_result = client.table('search_terms_monthly') \
-                             .select('month_id,category,searches') \
-                             .in_('month_id', month_ids) \
-                             .execute()
-        df = pd.DataFrame(terms_result.data)
-        agg = df.groupby(['category','month_id'])['searches'] \
-                .sum().reset_index()
+        terms_result = client.rpc(
+            'get_monthly_category_totals',
+            {'p_month_ids': month_ids}
+        ).execute()
+        agg = pd.DataFrame(terms_result.data)
+        if not agg.empty:
+            agg.rename(columns={'total_searches': 'searches'}, inplace=True)
+        else:
+            agg = pd.DataFrame(columns=['category', 'month_id', 'searches'])
 
         month_lookup = {
             (m['calendar_month'], m['calendar_year']): m
@@ -1205,6 +1207,214 @@ def yoy_comparison():
     except Exception as e:
         return jsonify({'status':'error','message':str(e)}), 400
 
+COMPARISON_TOP_N  = 3
+SHIFT_CONTEXT_N   = 5
+
+@app.route('/month-category-comparison', methods=['GET'])
+def month_category_comparison():
+    try:
+        client = supabase_db.get_client()
+
+        months_result = client.table('months').select('*') \
+                               .order('calendar_year', desc=False) \
+                               .order('calendar_month', desc=False) \
+                               .execute()
+        months = months_result.data
+        if not months:
+            return jsonify({'status':'success','comparisons':[]})
+
+        by_cal_month = {}
+        for m in months:
+            cm = m['calendar_month']
+            if cm not in by_cal_month:
+                by_cal_month[cm] = {}
+            by_cal_month[cm][m['calendar_year']] = m
+
+        valid_pairs = []
+        for cm, year_map in sorted(by_cal_month.items()):
+            years = sorted(year_map.keys())
+            if len(years) >= 2:
+                valid_pairs.append({
+                    'calendar_month': cm,
+                    'curr': year_map[years[-1]],
+                    'prev': year_map[years[-2]],
+                })
+
+        if not valid_pairs:
+            return jsonify({
+                'status': 'success',
+                'comparisons': [],
+                'note': 'No calendar months with data in two different years yet',
+            })
+
+        all_month_ids = []
+        for p in valid_pairs:
+            all_month_ids.append(p['curr']['id'])
+            all_month_ids.append(p['prev']['id'])
+
+        rpc_result = client.rpc(
+            'get_month_category_ranking',
+            {'p_month_ids': all_month_ids,
+             'p_top_n':     SHIFT_CONTEXT_N}
+        ).execute()
+
+        rankings = {}
+        for row in rpc_result.data:
+            mid = row['month_id']
+            if mid not in rankings:
+                rankings[mid] = []
+            rankings[mid].append({
+                'category': row['category'],
+                'searches': int(row['total_searches']),
+                'rank':     int(row['rank_pos']),
+            })
+
+        MONTH_ABBR = ['','Jan','Feb','Mar','Apr','May','Jun',
+                          'Jul','Aug','Sep','Oct','Nov','Dec']
+
+        def safe_pct(curr_s, prev_s):
+            if prev_s and prev_s > 0:
+                return round((curr_s - prev_s) / prev_s * 100, 1)
+            return None
+
+        comparisons = []
+        for pair in valid_pairs:
+            cm   = pair['calendar_month']
+            curr = pair['curr']
+            prev = pair['prev']
+
+            curr_all = rankings.get(curr['id'], [])
+            prev_all = rankings.get(prev['id'], [])
+
+            curr_by_name = {c['category']: c for c in curr_all}
+            prev_by_name = {c['category']: c for c in prev_all}
+
+            curr_top3 = [c for c in curr_all if c['rank'] <= COMPARISON_TOP_N]
+            prev_top3 = [c for c in prev_all if c['rank'] <= COMPARISON_TOP_N]
+
+            curr_top3_names = {c['category'] for c in curr_top3}
+            prev_top3_names = {c['category'] for c in prev_top3}
+
+            curr_enriched = []
+            for c in curr_top3:
+                name     = c['category']
+                prev_info= prev_by_name.get(name)
+                is_new_in_top3 = name not in prev_top3_names
+                delta_pct      = None
+                rank_change    = None
+                prev_rank_any  = None
+
+                if prev_info:
+                    prev_rank_any = prev_info['rank']
+                    delta_pct     = safe_pct(c['searches'], prev_info['searches'])
+                    if prev_info['rank'] <= COMPARISON_TOP_N:
+                        rank_change = prev_info['rank'] - c['rank']
+
+                curr_enriched.append({
+                    'category':      name,
+                    'searches':      c['searches'],
+                    'rank':          c['rank'],
+                    'is_new_in_top3':is_new_in_top3,
+                    'prev_rank':     prev_rank_any,
+                    'delta_pct':     delta_pct,
+                    'rank_change':   rank_change,
+                })
+
+            prev_enriched = []
+            for c in prev_top3:
+                name     = c['category']
+                curr_info= curr_by_name.get(name)
+                prev_enriched.append({
+                    'category':      name,
+                    'searches':      c['searches'],
+                    'rank':          c['rank'],
+                    'dropped_out':   name not in curr_top3_names,
+                    'curr_rank_any': curr_info['rank'] if curr_info else None,
+                })
+
+            all_cats = set(
+                [c['category'] for c in curr_all] +
+                [c['category'] for c in prev_all]
+            )
+            shift_data = []
+            for cat in all_cats:
+                if cat in ('Uncategorized', 'nan', ''):
+                    continue
+                ci = curr_by_name.get(cat)
+                pi = prev_by_name.get(cat)
+                in_curr_top3 = ci and ci['rank'] <= COMPARISON_TOP_N
+                in_prev_top3 = pi and pi['rank'] <= COMPARISON_TOP_N
+                if not in_curr_top3 and not in_prev_top3:
+                    continue
+                shift_data.append({
+                    'category':  cat,
+                    'prev_rank': pi['rank'] if pi else None,
+                    'curr_rank': ci['rank'] if ci else None,
+                })
+            shift_data.sort(key=lambda x: (x['prev_rank'] or 99))
+
+            same_count = len(curr_top3_names & prev_top3_names)
+
+            comparisons.append({
+                'calendar_month': cm,
+                'month_abbr':     MONTH_ABBR[cm],
+                'curr_label':     f"{MONTH_ABBR[cm]} {curr['calendar_year']}",
+                'prev_label':     f"{MONTH_ABBR[cm]} {prev['calendar_year']}",
+                'curr_year':      curr['calendar_year'],
+                'prev_year':      prev['calendar_year'],
+                'curr_month_id':  curr['id'],
+                'prev_month_id':  prev['id'],
+                'curr_categories':curr_enriched,
+                'prev_categories':prev_enriched,
+                'shift_data':     shift_data,
+                'same_count':     same_count,
+            })
+
+        return jsonify({
+            'status':      'success',
+            'comparisons': comparisons,
+            'top_n':       COMPARISON_TOP_N,
+        })
+
+    except Exception as e:
+        return jsonify({'status':'error','message':str(e)}), 400
+
+@app.route('/category-month-terms', methods=['GET'])
+def category_month_terms():
+    try:
+        category = request.args.get('category')
+        curr_month_id = request.args.get('curr_month_id', type=int)
+        prev_month_id = request.args.get('prev_month_id', type=int)
+
+        if not category or not curr_month_id or not prev_month_id:
+            return jsonify({'status':'error','message':'Missing parameters'}), 400
+
+        client = supabase_db.get_client()
+
+        curr_res = client.table('search_terms_monthly') \
+            .select('term_norm, searches') \
+            .eq('month_id', curr_month_id) \
+            .eq('category', category) \
+            .order('searches', desc=True) \
+            .limit(10).execute()
+
+        prev_res = client.table('search_terms_monthly') \
+            .select('term_norm, searches') \
+            .eq('month_id', prev_month_id) \
+            .eq('category', category) \
+            .order('searches', desc=True) \
+            .limit(10).execute()
+
+        curr_terms = [{'term': r['term_norm'], 'searches': r['searches']} for r in curr_res.data]
+        prev_terms = [{'term': r['term_norm'], 'searches': r['searches']} for r in prev_res.data]
+
+        return jsonify({
+            'status': 'success',
+            'curr_terms': curr_terms,
+            'prev_terms': prev_terms
+        })
+    except Exception as e:
+        return jsonify({'status':'error','message':str(e)}), 400
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))

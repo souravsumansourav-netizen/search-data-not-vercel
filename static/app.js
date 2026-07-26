@@ -4642,9 +4642,615 @@ function YoyPatternView({ sameMonthYoy, transitionPatterns }) {
   );
 }
 
+const CAT_COLORS = {
+  'Rings':               '#4f46e5',
+  'General Jewellery':   '#10b981',
+  'Chains':              '#f59e0b',
+  'Earrings':            '#ec4899',
+  'Bracelets & Bangles': '#06b6d4',
+  'Coins & Bullion':     '#8b5cf6',
+  'Mangalsutra':         '#f97316',
+  'Necklaces':           '#14b8a6',
+  'Pendants':            '#d946ef',
+  'Anklets':             '#84cc16',
+};
+function catColor(cat) {
+  return CAT_COLORS[cat] || '#888780';
+}
+
+function SameBadge() {
+  return (
+    <span style={{
+      fontSize:'10px', fontWeight:500,
+      background:'#EAF3DE', color:'#27500A',
+      padding:'2px 7px', borderRadius:'10px', flexShrink:0,
+    }}>same</span>
+  );
+}
+
+function RankBadge({ change }) {
+  const up = change > 0;
+  return (
+    <span style={{
+      fontSize:'10px', fontWeight:500,
+      background: up ? '#EAF3DE' : '#FCEBEB',
+      color:      up ? '#27500A' : '#791F1F',
+      padding:'2px 7px', borderRadius:'10px', flexShrink:0,
+    }}>
+      {up ? '▲ up' : '▼ down'} from #{up
+        ? 0
+        : 0}
+    </span>
+  );
+}
+
+function NewBadge({ prevRank }) {
+  return (
+    <span style={{
+      fontSize:'10px', fontWeight:500,
+      background:'#FAEEDA', color:'#633806',
+      padding:'2px 7px', borderRadius:'10px',
+      border:'0.5px solid #EF9F27', flexShrink:0,
+      whiteSpace:'nowrap',
+    }}>
+      {prevRank
+        ? `new · was #${prevRank} prev yr`
+        : 'new entrant'}
+    </span>
+  );
+}
+
+function ExitBadge({ currRankAny }) {
+  return (
+    <span style={{
+      fontSize:'10px', fontWeight:500,
+      background:'#F1EFE8', color:'#5F5E5A',
+      padding:'2px 7px', borderRadius:'10px', flexShrink:0,
+      whiteSpace:'nowrap',
+    }}>
+      {currRankAny
+        ? `now #${currRankAny} this yr`
+        : 'exited top 3'}
+    </span>
+  );
+}
+
+function DeltaBadge({ pct }) {
+  if (pct === null || pct === undefined) return null;
+  const up = pct >= 0;
+  return (
+    <span style={{
+      fontSize:'10px', fontWeight:500,
+      background: up ? '#EAF3DE' : '#FCEBEB',
+      color:      up ? '#27500A' : '#791F1F',
+      padding:'2px 6px', borderRadius:'10px', flexShrink:0,
+    }}>
+      {up ? '+' : ''}{pct}%
+    </span>
+  );
+}
+
+function MonthComparisonCard({ comp }) {
+  const [expandedCat, setExpandedCat] = useState(null);
+  const [termsData, setTermsData] = useState(null);
+  const [termsLoading, setTermsLoading] = useState(false);
+
+  const maxRows = Math.max(
+    comp.curr_categories.length,
+    comp.prev_categories.length
+  );
+
+  const sameCount = comp.same_count;
+  const consCls   = sameCount === 3
+    ? { bg:'#EAF3DE', color:'#27500A', label:'Fully consistent' }
+    : sameCount === 2
+      ? { bg:'#FAEEDA', color:'#633806', label:'Partially changed' }
+      : { bg:'#FCEBEB', color:'#791F1F', label:'Significantly changed' };
+
+  async function handleRowClick(cat) {
+    if (!cat) return;
+    if (expandedCat === cat) {
+      setExpandedCat(null);
+      return;
+    }
+    setExpandedCat(cat);
+    setTermsLoading(true);
+    setTermsData(null);
+    try {
+      const res = await fetch(`/category-month-terms?category=${encodeURIComponent(cat)}&curr_month_id=${comp.curr_month_id}&prev_month_id=${comp.prev_month_id}`);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setTermsData(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setTermsLoading(false);
+    }
+  }
+
+  return (
+    <div style={{
+      border:'0.5px solid var(--border)', borderRadius:'12px',
+      overflow:'hidden', marginBottom:'1.5rem',
+    }}>
+      {/* Column headers */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr' }}>
+        <div style={{
+          padding:'8px 14px', fontSize:'11px', fontWeight:500,
+          background:'#E6F1FB', color:'#0C447C',
+        }}>
+          {comp.prev_label} — previous year
+        </div>
+        <div style={{
+          padding:'8px 14px', fontSize:'11px', fontWeight:500,
+          background:'#EAF3DE', color:'#27500A',
+          borderLeft:'0.5px solid var(--border)',
+        }}>
+          {comp.curr_label} — current year
+        </div>
+      </div>
+
+      {/* Rows */}
+      {Array.from({ length: maxRows }).map((_, i) => {
+        const pc = comp.prev_categories[i];
+        const cc = comp.curr_categories[i];
+        const catName = cc?.category || pc?.category;
+        const isExpanded = expandedCat === catName;
+
+        return (
+          <React.Fragment key={i}>
+            <div 
+              onClick={() => handleRowClick(catName)}
+              style={{
+                display:'grid', gridTemplateColumns:'1fr 1fr',
+                borderTop:'0.5px solid var(--border)',
+                cursor: 'pointer',
+                background: isExpanded ? 'var(--surface-2)' : 'transparent',
+                transition: 'background 0.15s'
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
+              onMouseLeave={e => e.currentTarget.style.background = isExpanded ? 'var(--surface-2)' : 'transparent'}
+            >
+              {/* Previous year cell */}
+              <div style={{
+                padding:'9px 14px',
+                display:'flex', alignItems:'center', gap:'7px',
+              }}>
+                {pc ? (
+                  <>
+                    <span style={{
+                      fontSize:'11px', fontWeight:500,
+                      color:'var(--text-muted)', minWidth:'18px',
+                    }}>#{pc.rank}</span>
+                    <span style={{
+                      fontSize:'12px', fontWeight:500,
+                      color: pc.dropped_out ? '#BA7517' : 'var(--text-primary)',
+                      flex:1, minWidth:0, overflow:'hidden',
+                      textOverflow:'ellipsis', whiteSpace:'nowrap',
+                    }}>
+                      {pc.category}
+                    </span>
+                    <span style={{
+                      fontSize:'11px',
+                      color:'var(--text-secondary)', flexShrink:0,
+                    }}>
+                      {(pc.searches/1000).toFixed(1)}k
+                    </span>
+                    {pc.dropped_out && (
+                      <ExitBadge currRankAny={pc.curr_rank_any} />
+                    )}
+                  </>
+                ) : null}
+              </div>
+
+              {/* Current year cell */}
+              <div style={{
+                padding:'9px 14px',
+                display:'flex', alignItems:'center', gap:'7px',
+                borderLeft:'0.5px solid var(--border)',
+              }}>
+                {cc ? (
+                  <>
+                    <span style={{
+                      fontSize:'11px', fontWeight:500,
+                      color:'var(--text-muted)', minWidth:'18px',
+                    }}>#{cc.rank}</span>
+                    <span style={{
+                      fontSize:'12px', fontWeight:500,
+                      color:'var(--text-primary)',
+                      flex:1, minWidth:0, overflow:'hidden',
+                      textOverflow:'ellipsis', whiteSpace:'nowrap',
+                    }}>
+                      {cc.category}
+                    </span>
+                    <span style={{
+                      fontSize:'11px',
+                      color:'var(--text-secondary)', flexShrink:0,
+                    }}>
+                      {(cc.searches/1000).toFixed(1)}k
+                    </span>
+                    {/* Signal badge */}
+                    {cc.is_new_in_top3 ? (
+                      <NewBadge prevRank={cc.prev_rank} />
+                    ) : cc.rank_change !== null && cc.rank_change !== 0 ? (
+                      <span style={{
+                        fontSize:'10px', fontWeight:500,
+                        background: cc.rank_change > 0 ? '#EAF3DE' : '#FCEBEB',
+                        color: cc.rank_change > 0 ? '#27500A' : '#791F1F',
+                        padding:'2px 7px', borderRadius:'10px',
+                        flexShrink:0, whiteSpace:'nowrap',
+                      }}>
+                        {cc.rank_change > 0 ? '▲ up' : '▼ down'}
+                        {' from #'}{cc.prev_rank}
+                      </span>
+                    ) : (
+                      <SameBadge />
+                    )}
+                    {/* Volume delta */}
+                    <DeltaBadge pct={cc.delta_pct} />
+                  </>
+                ) : null}
+              </div>
+            </div>
+            
+            {/* Expanded Drilldown */}
+            {isExpanded && (
+              <div style={{
+                background: '#fafafa',
+                borderTop: '0.5px solid var(--border)',
+                padding: '12px 14px',
+                fontSize: '11px',
+              }}>
+                <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                  Top Search Keywords for {catName}
+                </div>
+                {termsLoading ? (
+                  <div style={{ color: 'var(--text-muted)', padding: '10px 0' }}>Loading keywords...</div>
+                ) : termsData ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                    <div>
+                      <div style={{ color: '#0C447C', fontWeight: 500, marginBottom: '6px' }}>{comp.prev_label}</div>
+                      {termsData.prev_terms?.length > 0 ? termsData.prev_terms.map((t, idx) => (
+                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid #eee' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>{t.term}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{t.searches.toLocaleString()}</span>
+                        </div>
+                      )) : <div style={{ color: 'var(--text-muted)' }}>No data</div>}
+                    </div>
+                    <div>
+                      <div style={{ color: '#27500A', fontWeight: 500, marginBottom: '6px' }}>{comp.curr_label}</div>
+                      {termsData.curr_terms?.length > 0 ? termsData.curr_terms.map((t, idx) => (
+                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid #eee' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>{t.term}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{t.searches.toLocaleString()}</span>
+                        </div>
+                      )) : <div style={{ color: 'var(--text-muted)' }}>No data</div>}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--text-muted)' }}>Failed to load terms</div>
+                )}
+              </div>
+            )}
+          </React.Fragment>
+        );
+      })}
+
+      {/* Consistency bar */}
+      <div style={{
+        padding:'7px 14px', borderTop:'0.5px solid var(--border)',
+        display:'flex', alignItems:'center', gap:'7px',
+        fontSize:'11px', color:'var(--text-secondary)',
+        background:'var(--surface-1)',
+      }}>
+        <span>Consistency:</span>
+        <span style={{
+          fontSize:'10px', fontWeight:500,
+          background: consCls.bg, color: consCls.color,
+          padding:'2px 8px', borderRadius:'10px',
+        }}>
+          {consCls.label}
+        </span>
+        <span style={{ color:'var(--text-muted)' }}>
+          {sameCount} of 3 categories repeated from previous year
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function RankShiftChart({ shiftData, prevYear, currYear }) {
+  if (!shiftData || shiftData.length === 0) return null;
+
+  const SVG_W  = 620;
+  const ROW_H  = 54;
+  const PAD_T  = 38;
+  const PAD_B  = 20;
+  const LEFT_X = 220;
+  const RIGHT_X= 400;
+  const SVG_H  = PAD_T + shiftData.length * ROW_H + PAD_B;
+
+  function rowY(i) {
+    return PAD_T + i * ROW_H + ROW_H / 2;
+  }
+
+  const items = shiftData.map((r, i) => ({ ...r, y: rowY(i) }));
+
+  const lines      = [];
+  const leftLabels = [];
+  const rightLabels= [];
+  const dots       = [];
+  const midLabels  = [];
+
+  items.forEach((r, i) => {
+    const color    = catColor(r.category);
+    const hasPrev  = r.prev_rank !== null && r.prev_rank <= 3;
+    const hasCurr  = r.curr_rank !== null && r.curr_rank <= 3;
+    const isNew    = !hasPrev && hasCurr;
+    const isExit   = hasPrev && !hasCurr;
+    const isSame   = hasPrev && hasCurr && r.prev_rank === r.curr_rank;
+    const isMoved  = hasPrev && hasCurr && r.prev_rank !== r.curr_rank;
+
+    const y = r.y;
+
+    if (isSame || isMoved) {
+      lines.push(
+        `<line x1="${LEFT_X}" y1="${y}" x2="${RIGHT_X}" y2="${y}"
+          stroke="${color}"
+          stroke-width="${isMoved ? 2.5 : 1.5}"
+          stroke-dasharray="${isSame ? '4 3' : 'none'}"
+          opacity="0.9"/>`
+      );
+      dots.push(
+        `<circle cx="${LEFT_X}" cy="${y}" r="5" fill="${color}"
+          stroke="white" stroke-width="1.5"/>`,
+        `<circle cx="${RIGHT_X}" cy="${y}" r="5" fill="${color}"
+          stroke="white" stroke-width="1.5"/>`
+      );
+      leftLabels.push(
+        `<text x="${LEFT_X - 10}" y="${y + 4}" text-anchor="end"
+          font-size="11" font-weight="500" fill="${color}">
+          #${r.prev_rank}  ${r.category.length > 16
+            ? r.category.slice(0, 15) + '…' : r.category}
+        </text>`
+      );
+      rightLabels.push(
+        `<text x="${RIGHT_X + 10}" y="${y + 4}" text-anchor="start"
+          font-size="11" font-weight="500" fill="${color}">
+          #${r.curr_rank}  ${r.category.length > 14
+            ? r.category.slice(0, 13) + '…' : r.category}
+        </text>`
+      );
+      if (isMoved) {
+        const up    = r.prev_rank > r.curr_rank;
+        const midX  = (LEFT_X + RIGHT_X) / 2;
+        midLabels.push(
+          `<text x="${midX}" y="${y - 7}" text-anchor="middle"
+            font-size="10" font-weight="500"
+            fill="${up ? '#27500A' : '#791F1F'}">
+            ${up ? '▲ climbed' : '▼ dropped'}
+          </text>`
+        );
+      }
+    } else if (isExit) {
+      const exitX = LEFT_X + (RIGHT_X - LEFT_X) * 0.38;
+      lines.push(
+        `<line x1="${LEFT_X}" y1="${y}" x2="${exitX}" y2="${y}"
+          stroke="#E24B4A" stroke-width="2"
+          stroke-dasharray="3 3" opacity="0.5"/>`
+      );
+      dots.push(
+        `<circle cx="${LEFT_X}" cy="${y}" r="5" fill="#E24B4A"
+          stroke="white" stroke-width="1.5" opacity="0.5"/>`
+      );
+      leftLabels.push(
+        `<text x="${LEFT_X - 10}" y="${y + 4}" text-anchor="end"
+          font-size="11" font-weight="400" fill="#888780"
+          opacity="0.6">
+          #${r.prev_rank}  ${r.category.length > 16
+            ? r.category.slice(0, 15) + '…' : r.category}
+        </text>`
+      );
+      const exitNote = r.curr_rank
+        ? `now #${r.curr_rank} this yr →`
+        : `not in top 3 this yr →`;
+      rightLabels.push(
+        `<text x="${exitX + 6}" y="${y + 4}" text-anchor="start"
+          font-size="10" fill="#E24B4A" opacity="0.75">
+          ${exitNote}
+        </text>`
+      );
+    } else if (isNew) {
+      const enterX = RIGHT_X - (RIGHT_X - LEFT_X) * 0.38;
+      lines.push(
+        `<line x1="${enterX}" y1="${y}" x2="${RIGHT_X}" y2="${y}"
+          stroke="#BA7517" stroke-width="2" opacity="0.8"/>`
+      );
+      dots.push(
+        `<circle cx="${RIGHT_X}" cy="${y}" r="5" fill="#BA7517"
+          stroke="white" stroke-width="1.5"/>`
+      );
+      rightLabels.push(
+        `<text x="${RIGHT_X + 10}" y="${y + 4}" text-anchor="start"
+          font-size="11" font-weight="500" fill="#BA7517">
+          #${r.curr_rank}  ${r.category.length > 14
+            ? r.category.slice(0, 13) + '…' : r.category}
+        </text>`
+      );
+      const fromNote = r.prev_rank
+        ? `← was #${r.prev_rank} prev yr`
+        : `← new`;
+      leftLabels.push(
+        `<text x="${enterX - 6}" y="${y + 4}" text-anchor="end"
+          font-size="10" fill="#BA7517">
+          ${fromNote}
+        </text>`
+      );
+    }
+  });
+
+  const svgContent = `
+    <text x="${LEFT_X}" y="18" text-anchor="middle" font-size="11"
+      font-weight="500" fill="#0C447C">${prevYear}</text>
+    <text x="${RIGHT_X}" y="18" text-anchor="middle" font-size="11"
+      font-weight="500" fill="#27500A">${currYear}</text>
+    <line x1="${LEFT_X}" y1="24" x2="${LEFT_X}" y2="${SVG_H - PAD_B}"
+      stroke="#0C447C" stroke-width="0.5" opacity="0.2"/>
+    <line x1="${RIGHT_X}" y1="24" x2="${RIGHT_X}" y2="${SVG_H - PAD_B}"
+      stroke="#27500A" stroke-width="0.5" opacity="0.2"/>
+    ${lines.join('')}
+    ${dots.join('')}
+    ${leftLabels.join('')}
+    ${rightLabels.join('')}
+    ${midLabels.join('')}
+  `;
+
+  return (
+    <svg
+      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+      width="100%"
+      style={{ display:'block', fontFamily:'var(--font-sans)' }}
+      aria-label={`Rank shift chart comparing ${prevYear} and ${currYear}`}
+    >
+      <title>Category rank shift</title>
+      <desc>
+        Shows how each category's rank changed between {prevYear}
+        and {currYear} for the selected month
+      </desc>
+      <g dangerouslySetInnerHTML={{ __html: svgContent }} />
+    </svg>
+  );
+}
+
+function PredictabilityView({ data }) {
+  const comparisons = data?.comparisons || [];
+  const [activeMonth, setActiveMonth] = useState(
+    comparisons[0]?.calendar_month ?? null
+  );
+
+  useEffect(() => {
+    if (comparisons.length > 0 && !activeMonth) {
+      setActiveMonth(comparisons[0].calendar_month);
+    }
+  }, [comparisons]);
+
+  if (!data || comparisons.length === 0) {
+    return (
+      <div style={{
+        textAlign:'center', padding:'3rem 0',
+        fontSize:'12px', color:'var(--text-secondary)',
+      }}>
+        Need at least two years of data for the same calendar
+        month to compare. Upload the same calendar months for
+        a second year to unlock this view.
+      </div>
+    );
+  }
+
+  const active = comparisons.find(
+    c => c.calendar_month === activeMonth
+  ) || comparisons[0];
+
+  return (
+    <div>
+      {/* Legend */}
+      <div style={{
+        display:'flex', gap:'12px', flexWrap:'wrap',
+        marginBottom:'1rem',
+      }}>
+        {[
+          { dot:'#639922', label:'Same rank' },
+          { dot:'#4f46e5', label:'Rank shifted' },
+          { dot:'#BA7517', label:'New entrant' },
+          { dot:'#E24B4A', label:'Exited top 3' },
+        ].map(l => (
+          <div key={l.label} style={{
+            display:'flex', alignItems:'center', gap:'5px',
+            fontSize:'11px', color:'var(--text-secondary)',
+          }}>
+            <div style={{
+              width:'8px', height:'8px', borderRadius:'50%',
+              background: l.dot, flexShrink:0,
+            }} />
+            {l.label}
+          </div>
+        ))}
+      </div>
+
+      {/* Month pills */}
+      <div style={{
+        display:'flex', gap:'6px', flexWrap:'wrap',
+        marginBottom:'1.25rem',
+      }}>
+        {comparisons.map(c => (
+          <button
+            key={c.calendar_month}
+            onClick={() => setActiveMonth(c.calendar_month)}
+            style={{
+              padding:'5px 14px', borderRadius:'20px',
+              fontSize:'12px', fontWeight:500, cursor:'pointer',
+              border:'0.5px solid',
+              borderColor: activeMonth === c.calendar_month
+                ? '#4f46e5' : 'var(--border)',
+              background: activeMonth === c.calendar_month
+                ? '#4f46e5' : 'var(--surface-2)',
+              color: activeMonth === c.calendar_month
+                ? '#fff' : 'var(--text-secondary)',
+              transition:'all 0.15s',
+            }}
+          >
+            {c.month_abbr}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Section 1: Side-by-side comparison card ── */}
+      <p style={{
+        fontSize:'12px', fontWeight:500,
+        color:'var(--text-primary)', marginBottom:'4px',
+      }}>
+        Top 3 category comparison
+      </p>
+      <p style={{
+        fontSize:'11px', color:'var(--text-secondary)',
+        marginBottom:'12px',
+      }}>
+        Same month, previous vs current year — what held,
+        what shifted rank, and what is a new entrant
+      </p>
+      <MonthComparisonCard comp={active} />
+
+      {/* ── Section 2: Rank shift chart ── */}
+      <p style={{
+        fontSize:'12px', fontWeight:500,
+        color:'var(--text-primary)',
+        marginBottom:'4px', marginTop:'1.5rem',
+      }}>
+        Category rank shift
+      </p>
+      <p style={{
+        fontSize:'11px', color:'var(--text-secondary)',
+        marginBottom:'12px',
+      }}>
+        Where each category ranked last year and where it ranks
+        this year. Dashed line = held position. Solid line =
+        moved. Orange entry = new entrant with its previous rank.
+        Red faded exit = dropped out with its current rank.
+      </p>
+      <RankShiftChart
+        shiftData={active.shift_data}
+        prevYear={active.prev_year}
+        currYear={active.curr_year}
+      />
+    </div>
+  );
+}
+
 function SeasonalityModule() {
   const [indexData, setIndexData]   = useState(null);
   const [yoyData,    setYoyData]    = useState(null);
+  const [compData,   setCompData]   = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [activeTab,  setActiveTab]  = useState('index');
 
@@ -4653,9 +5259,11 @@ function SeasonalityModule() {
     Promise.all([
       fetch('/category-index').then(r => r.json()),
       fetch('/yoy-comparison').then(r => r.json()),
-    ]).then(([idx, yoy]) => {
+      fetch('/month-category-comparison').then(r => r.ok ? r.json() : { comparisons: [] }).catch(() => ({ comparisons: [] })),
+    ]).then(([idx, yoy, comp]) => {
       setIndexData(idx);
       setYoyData(yoy);
+      setCompData(comp);
       setLoading(false);
     }).catch(e => {
       console.error(e);
@@ -4693,6 +5301,10 @@ function SeasonalityModule() {
             className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-all ${activeTab === 'index' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
             🌡 Seasonality Index Heatmap
           </button>
+          <button onClick={() => setActiveTab('predictability')}
+            className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-all ${activeTab === 'predictability' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
+            📊 Predictability
+          </button>
           <button onClick={() => setActiveTab('yoy')}
             className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-all ${activeTab === 'yoy' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
             🔄 YoY & Transition Patterns
@@ -4702,6 +5314,9 @@ function SeasonalityModule() {
 
       {activeTab === 'index' && (
         <CategoryIndexView months={indexData.months} categories={indexData.categories} monthlyLeaders={indexData.monthly_leaders} />
+      )}
+      {activeTab === 'predictability' && (
+        <PredictabilityView data={compData} />
       )}
       {activeTab === 'yoy' && (
         <YoyPatternView sameMonthYoy={yoyData?.same_month_yoy || []} transitionPatterns={yoyData?.transition_patterns || []} />
